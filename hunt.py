@@ -24,8 +24,8 @@ MAX_RUN_MINUTES = int(os.environ.get("MAX_RUN_MINUTES", "300"))
 MAX_DURATION    = MAX_RUN_MINUTES * 60
 
 # Cadence auto-ajustable
-START_INTERVAL = 110   # point de depart rapide et sur
-MIN_INTERVAL   = 85    # plancher de securite anti-429 (Oracle throttle vers 76-80s)
+START_INTERVAL = 95    # point de depart proche du palier optimal
+MIN_INTERVAL   = 90    # plancher strictement verrouille a 90s (evite tout throttle 429)
 MAX_INTERVAL   = 600   # plafond en cas de throttles repetes
 
 cc = oci.core.ComputeClient(CONFIG)
