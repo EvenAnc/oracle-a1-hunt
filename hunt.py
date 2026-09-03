@@ -19,13 +19,13 @@ IMAGE  = os.environ["OCI_IMAGE"]
 SSHKEY = os.environ["OCI_SSH_KEY"]
 TEN    = CONFIG["tenancy"]
 
-# Duree maximale de la session par runner GitHub (48 minutes par defaut)
-MAX_RUN_MINUTES = int(os.environ.get("MAX_RUN_MINUTES", "48"))
+# Duree maximale de la session par runner GitHub (300 minutes = 5 heures)
+MAX_RUN_MINUTES = int(os.environ.get("MAX_RUN_MINUTES", "300"))
 MAX_DURATION    = MAX_RUN_MINUTES * 60
 
 # Cadence auto-ajustable
-START_INTERVAL = 140   # point de depart prudent
-MIN_INTERVAL   = 75    # plancher de securite (Oracle commence a throttler vers 76-80s)
+START_INTERVAL = 110   # point de depart rapide et sur
+MIN_INTERVAL   = 85    # plancher de securite anti-429 (Oracle throttle vers 76-80s)
 MAX_INTERVAL   = 600   # plafond en cas de throttles repetes
 
 cc = oci.core.ComputeClient(CONFIG)
