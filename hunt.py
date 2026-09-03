@@ -77,9 +77,9 @@ while inst is None:
         if e.status == 429:
             throttles += 1
             propres = 0
-            interval = min(int(interval * 1.5), MAX_INTERVAL)
+            interval = START_INTERVAL if throttles == 1 else min(int(START_INTERVAL * (1.25 ** (throttles - 1))), MAX_INTERVAL)
             wait = min(180 * (2 ** (throttles - 1)), 1800)
-            print(f"THROTTLE (429 x{throttles}) -> pause securite {wait}s, cadence augmentee a {interval}s", flush=True)
+            print(f"THROTTLE (429 x{throttles}) -> pause securite {wait}s, cadence fixee a {interval}s", flush=True)
         elif e.status == 500 and "capacity" in msg:
             throttles = 0
             n_capacity += 1
