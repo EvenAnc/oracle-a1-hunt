@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chasse Oracle A1</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📡</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    color-scheme: light dark;
+    --bg:#EEF1F0; --surface:#FFFFFF; --surface-2:#F5F8F7;
+    --ink:#15211E; --ink-dim:#55655F; --line:#DCE3E0;
+    --accent:#146F76; --accent-soft:#DBEEEF;
+    --ok:#2E8B57; --ok-soft:#E3F3EA;
+    --warn:#B9791E; --warn-soft:#F6E8D1;
+    --crit:#C0392B; --crit-soft:#F8DEDB;
+    --shadow: 0 1px 2px rgba(21,33,30,.06), 0 8px 24px -12px rgba(21,33,30,.12);
+    --radius: 8px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0F1615; --surface:#161F1D; --surface-2:#1C2725;
+      --ink:#E7EFEC; --ink-dim:#93A6A0; --line:#283330;
+      --accent:#4FC7CC; --accent-soft:#163A3C;
+      --ok:#4CAF7B; --ok-soft:#173824;
+      --warn:#E0A344; --warn-soft:#392C13;
+      --crit:#E1584A; --crit-soft:#3A1D19;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 28px -14px rgba(0,0,0,.55);
+    }
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:"Archivo",system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  img{max-width:100%;}
+  .wrap{max-width:1080px; margin:0 auto; padding:28px 20px 60px;}
+
+  .topbar{display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; margin-bottom:20px;}
+  .brand{display:flex; align-items:baseline; gap:10px;}
+  .brand h1{font-size:1.5rem; font-weight:800; margin:0; letter-spacing:-.01em;}
+  .brand .tag{font-size:.72rem; color:var(--ink-dim); font-family:"JetBrains Mono",monospace;}
+  .toplinks{display:flex; align-items:center; gap:14px; font-size:.85rem;}
+  .toplinks a{color:var(--accent); text-decoration:none; border-bottom:1px solid transparent;}
+  .toplinks a:hover{border-color:var(--accent);}
+  #refresh-btn{
+    font:inherit; font-size:.8rem; font-weight:600; color:var(--accent);
+    background:var(--accent-soft); border:none; border-radius:6px; padding:6px 12px; cursor:pointer;
+  }
+  #refresh-btn:hover{filter:brightness(0.97);}
+  #refresh-btn:disabled{opacity:.6; cursor:default;}
+
+  .banner{
+    display:flex; align-items:center; gap:16px;
+    background:var(--ok-soft); border:1px solid var(--ok);
+    border-radius:var(--radius); padding:16px 20px; margin-bottom:22px; box-shadow:var(--shadow);
+  }
+  .banner.crit{background:var(--crit-soft); border-color:var(--crit);}
+  .banner .dot{width:11px; height:11px; border-radius:50%; background:var(--ok); flex:0 0 auto;
+    box-shadow:0 0 0 4px color-mix(in srgb, var(--ok) 22%, transparent);}
+  .banner.crit .dot{background:var(--crit); box-shadow:0 0 0 4px color-mix(in srgb, var(--crit) 22%, transparent);}
+  @media (prefers-reduced-motion: no-preference){ .banner .dot{animation:pulse 2.4s ease-in-out infinite;} }
+  @keyframes pulse{ 0%,100%{box-shadow:0 0 0 4px color-mix(in srgb, currentColor 22%, transparent);} 50%{box-shadow:0 0 0 8px color-mix(in srgb, currentColor 8%, transparent);} }
+  .banner strong{font-weight:700;}
+  .banner .sub{color:var(--ink-dim); font-size:.85rem;}
+
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px;
+    background:var(--line); border:1px solid var(--line); border-radius:var(--radius);
+    overflow:hidden; margin-bottom:22px; box-shadow:var(--shadow);}
+  .tile{background:var(--surface); padding:16px 18px;}
+  .tile .n{font-family:"JetBrains Mono",monospace; font-size:1.7rem; font-weight:600;
+    font-variant-numeric:tabular-nums; line-height:1.1;}
+  .tile .l{font-size:.72rem; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.06em; margin-top:4px;}
+  .tile.ok .n{color:var(--ok);} .tile.warn .n{color:var(--warn);}
+
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:20px 22px; margin-bottom:22px; box-shadow:var(--shadow);}
+  .card h2{font-size:.95rem; font-weight:700; margin:0 0 4px;}
+  .card .desc{font-size:.82rem; color:var(--ink-dim); margin:0 0 16px; max-width:62ch;}
+
+  .chart-scroll{overflow-x:auto; padding-bottom:6px;}
+  .chart{display:flex; align-items:flex-end; gap:2px; height:130px; min-width:640px;}
+  .bar{flex:1 0 5px; min-width:4px; max-width:11px; border-radius:2px 2px 0 0; background:var(--ok); cursor:default;}
+  .bar.cancelled{background:var(--warn); opacity:.85;}
+  .bar.running{background:var(--accent);}
+  .bar.failure{background:var(--crit);}
+  @media (prefers-reduced-motion: no-preference){ .bar.running{animation:glow 1.8s ease-in-out infinite;} }
+  @keyframes glow{ 0%,100%{opacity:1;} 50%{opacity:.55;} }
+  .chart-axis{display:flex; justify-content:space-between; font-size:.7rem; color:var(--ink-dim);
+    font-family:"JetBrains Mono",monospace; margin-top:6px; min-width:640px;}
+  .legend{display:flex; gap:16px; margin-top:14px; font-size:.76rem; color:var(--ink-dim); flex-wrap:wrap;}
+  .legend span{display:inline-flex; align-items:center; gap:6px;}
+  .legend i{width:9px; height:9px; border-radius:2px; display:inline-block;}
+
+  .split{display:grid; grid-template-columns:1.5fr 1fr; gap:22px;}
+  @media (max-width:760px){ .split{grid-template-columns:1fr;} }
+  table{width:100%; border-collapse:collapse; font-size:.84rem;}
+  th{text-align:left; font-size:.7rem; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-dim);
+    font-weight:600; padding:0 10px 8px; border-bottom:1px solid var(--line);}
+  td{padding:8px 10px; border-bottom:1px solid var(--line); font-family:"JetBrains Mono",monospace; font-variant-numeric:tabular-nums;}
+  tr:last-child td{border-bottom:none;}
+  .pill{display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:99px; font-size:.72rem;
+    font-weight:600; font-family:"Archivo",sans-serif;}
+  .pill.ok{background:var(--ok-soft); color:var(--ok);}
+  .pill.warn{background:var(--warn-soft); color:var(--warn);}
+  .pill.running{background:var(--accent-soft); color:var(--accent);}
+  .pill.failure{background:var(--crit-soft); color:var(--crit);}
+  .table-scroll{max-height:420px; overflow-y:auto; overflow-x:auto;}
+  .table-note{font-size:.76rem; color:var(--ink-dim); margin-top:10px;}
+
+  .spec dl{display:grid; grid-template-columns:auto 1fr; gap:8px 14px; margin:0; font-size:.82rem;}
+  .spec dt{color:var(--ink-dim);}
+  .spec dd{margin:0; font-family:"JetBrains Mono",monospace; text-align:right;}
+  .spec hr{border:none; border-top:1px solid var(--line); margin:14px 0;}
+  .spec .note{font-size:.78rem; color:var(--ink-dim); line-height:1.5;}
+
+  .token-row{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .token-row input{
+    flex:1; min-width:200px; font:inherit; font-family:"JetBrains Mono",monospace; font-size:.78rem;
+    padding:7px 10px; border:1px solid var(--line); border-radius:6px; background:var(--surface-2); color:var(--ink);
+  }
+  .token-row button{
+    font:inherit; font-size:.8rem; font-weight:600; color:var(--accent); background:var(--accent-soft);
+    border:none; border-radius:6px; padding:7px 14px; cursor:pointer;
+  }
+  .deep-status{font-size:.78rem; color:var(--ink-dim); margin-top:10px; line-height:1.5;}
+  .deep-status b{color:var(--ink);}
+
+  .footer-note{font-size:.78rem; color:var(--ink-dim); text-align:center; margin-top:8px;}
+  a{color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <h1>📡 Chasse Oracle A1</h1>
+      <span class="tag">eu-marseille-1 · Itte:EU-MARSEILLE-1-AD-1</span>
+    </div>
+    <div class="toplinks">
+      <a href="https://github.com/EvenAnc/oracle-a1-hunt" target="_blank" rel="noopener">Dépôt</a>
+      <a href="https://github.com/EvenAnc/oracle-a1-hunt/actions" target="_blank" rel="noopener">Actions GitHub</a>
+      <button id="refresh-btn" onclick="loadAll()">↻ Actualiser</button>
+    </div>
+  </div>
+
+  <div class="banner" id="banner">
+    <div class="dot"></div>
+    <div>
+      <div><strong id="banner-title">Chargement…</strong></div>
+      <div class="sub" id="banner-sub">Interrogation de l'API GitHub en direct.</div>
+    </div>
+  </div>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Historique des exécutions</h2>
+    <p class="desc">Chaque barre est une exécution du workflow GitHub Actions. La hauteur suit une échelle en racine carrée pour que les runs courts restent visibles à côté des runs de plusieurs heures.</p>
+    <div class="chart-scroll">
+      <div class="chart" id="chart"></div>
+      <div class="chart-axis"><span id="axis-left">—</span><span id="axis-right">—</span></div>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--ok)"></i>terminé, pas de capacité (normal)</span>
+      <span><i style="background:var(--warn)"></i>annulé (remplacé par le run suivant)</span>
+      <span><i style="background:var(--accent)"></i>en cours</span>
+      <span><i style="background:var(--crit)"></i>échec réel — à vérifier</span>
+    </div>
+  </div>
+
+  <div class="split">
+    <div class="card">
+      <h2>Dernières exécutions</h2>
+      <p class="desc">Les 20 runs les plus récents.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>#</th><th>Début</th><th>Statut</th><th>Durée</th></tr></thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+      <p class="table-note">La durée inclut parfois une attente en file (le run suivant patiente tant que le précédent tourne) — ce n'est pas du temps de calcul perdu.</p>
+    </div>
+
+    <div class="card spec">
+      <h2>Paramètres de la chasse</h2>
+      <dl>
+        <dt>Forme visée</dt><dd>2 OCPU · 12 Go</dd>
+        <dt>Forme de repli</dt><dd>1 OCPU · 1 Go</dd>
+        <dt>Image</dt><dd>Ubuntu 24.04 aarch64</dd>
+        <dt>Disque</dt><dd>150 Go</dd>
+        <dt>Détection</dt><dd>rapport de capacité</dd>
+        <dt>Cadence rapport</dt><dd>30 s → 300 s</dd>
+        <dt>Cadence création</dt><dd>90 s min.</dd>
+        <dt>Planification</dt><dd>toutes les 10 min</dd>
+      </dl>
+      <hr>
+      <p class="note">Si le repli (1/1) décroche en premier, le script tente automatiquement de l'agrandir vers la cible (arrêt → redimensionnement → redémarrage), jusqu'à 10 essais. En cas d'échec, l'instance reste à 1/1 — jamais perdue.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Analyse approfondie des logs (optionnel)</h2>
+    <p class="desc">Sans jeton, GitHub ne laisse pas lire le détail des logs (throttles 429, fenêtres de capacité vues puis perdues). Un jeton <em>fine-grained</em> en lecture seule sur ce dépôt (permission "Actions: Read-only") suffit — il reste uniquement dans ton navigateur (stockage local), n'est jamais envoyé ailleurs qu'à api.github.com, et se crée sur <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">github.com/settings/personal-access-tokens</a>.</p>
+    <div class="token-row">
+      <input id="token-input" type="password" placeholder="github_pat_…" autocomplete="off">
+      <button onclick="saveTokenAndScan()">Analyser les 30 derniers runs</button>
+      <button onclick="clearToken()">Oublier le jeton</button>
+    </div>
+    <div class="deep-status" id="deep-status">Aucune analyse de logs effectuée pour l'instant.</div>
+  </div>
+
+  <p class="footer-note">Page statique GitHub Pages — s'actualise en direct depuis l'API GitHub à chaque ouverture (et toutes les 5 min). Aucune donnée n'est stockée ailleurs que dans ton navigateur.</p>
+</div>
+
+<script>
+const REPO = "EvenAnc/oracle-a1-hunt";
+const API = "https://api.github.com/repos/" + REPO;
+
+function fmtDur(s){
+  if(s < 60) return Math.max(0,Math.round(s)) + " s";
+  const h = Math.floor(s/3600), m = Math.round((s%3600)/60);
+  if(h > 0) return h + " h " + String(m).padStart(2,"0") + " min";
+  return Math.round(s/60) + " min";
+}
+function fmtDate(iso){
+  return new Date(iso).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+}
+function fmtDateTime(iso){
+  return new Date(iso).toLocaleString("fr-FR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+}
+
+function rowClass(r){
+  if(r.status !== "completed") return "running";
+  if(r.conclusion === "cancelled") return "cancelled";
+  if(r.conclusion === "success") return "";
+  return "failure"; // failure, timed_out, etc. — genuine anomaly to check
+}
+
+async function loadAll(){
+  const btn = document.getElementById("refresh-btn");
+  btn.disabled = true; btn.textContent = "↻ Actualisation…";
+  try{
+    const resp = await fetch(API + "/actions/runs?per_page=100");
+    if(!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    render(data.workflow_runs.slice().reverse()); // ordre chronologique croissant
+  }catch(e){
+    document.getElementById("banner-title").textContent = "Impossible de contacter l'API GitHub";
+    document.getElementById("banner-sub").textContent = e.message + " — nouvel essai dans 5 min, ou clique Actualiser.";
+    document.getElementById("banner").classList.add("crit");
+  }finally{
+    btn.disabled = false; btn.textContent = "↻ Actualiser";
+  }
+}
+
+function render(runs){
+  const now = new Date();
+  const timeline = runs.map(r => {
+    const started = new Date(r.run_started_at);
+    const dur = r.status === "completed" ? (new Date(r.updated_at) - started)/1000 : (now - started)/1000;
+    return {n:r.run_number, status:r.status, conclusion:r.conclusion, started:r.run_started_at, duration_s:dur, html_url:r.html_url};
+  });
+  const last = timeline[timeline.length-1];
+  const first = timeline[0];
+
+  // ---- banner ----
+  const anyFailure = timeline.some(t => t.status==="completed" && t.conclusion!=="success" && t.conclusion!=="cancelled");
+  const banner = document.getElementById("banner");
+  banner.classList.toggle("crit", anyFailure);
+  if(anyFailure){
+    const bad = timeline.filter(t => t.status==="completed" && t.conclusion!=="success" && t.conclusion!=="cancelled").pop();
+    document.getElementById("banner-title").innerHTML =
+      `Un run s'est terminé en "${bad.conclusion}" — <a href="${bad.html_url}" target="_blank">vérifie le run #${bad.n}</a>`;
+    document.getElementById("banner-sub").textContent =
+      "Ça peut être une instance obtenue (bonne nouvelle) ou une vraie erreur — ouvre les logs pour savoir.";
+  } else {
+    document.getElementById("banner-title").textContent = "Aucune capacité trouvée pour l'instant";
+    document.getElementById("banner-sub").textContent =
+      `Run #${last.n} ${last.status==="in_progress" ? "en cours depuis "+fmtDur(last.duration_s) : "terminé"} · nouvelle vérification toutes les 10 min.`;
+  }
+
+  // ---- tiles ----
+  const elapsedH = (now - new Date(first.started)) / 3600000;
+  const days = Math.floor(elapsedH/24), hrs = Math.round(elapsedH%24);
+  const completed = timeline.filter(t=>t.status==="completed");
+  const success = completed.filter(t=>t.conclusion==="success");
+  const cancelled = completed.filter(t=>t.conclusion==="cancelled");
+  const avgSuccess = success.length ? success.reduce((a,t)=>a+t.duration_s,0)/success.length : 0;
+
+  const tiles = [
+    {n: timeline.length, l:"Exécutions totales"},
+    {n: days+" j "+hrs+" h", l:"En chasse depuis"},
+    {n: success.length, l:"Terminées sans capacité", cls:"ok"},
+    {n: cancelled.length, l:"Annulées (relais)", cls:"warn"},
+    {n: fmtDur(avgSuccess), l:"Durée moyenne / run"},
+    {n: "#"+last.n, l: last.status==="in_progress" ? "Run en cours" : "Dernier run"},
+  ];
+  document.getElementById("tiles").innerHTML = tiles.map(t =>
+    `<div class="tile ${t.cls||''}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`
+  ).join("");
+
+  // ---- chart ----
+  const maxDur = Math.max(...timeline.map(r=>r.duration_s), 1);
+  const scale = d => 6 + 118 * Math.sqrt(d / maxDur);
+  document.getElementById("chart").innerHTML = timeline.map(r => {
+    const cls = rowClass(r);
+    const label = `Run #${r.n} · ${fmtDate(r.started)} · ${fmtDur(r.duration_s)} · ${r.status==="in_progress"?"en cours":r.conclusion}`;
+    return `<a href="${r.html_url}" target="_blank" style="text-decoration:none"><div class="bar ${cls}" style="height:${scale(r.duration_s).toFixed(0)}px" title="${label}"></div></a>`;
+  }).join("");
+  document.getElementById("axis-left").textContent = `#${first.n} · ${fmtDate(first.started)}`;
+  document.getElementById("axis-right").textContent = `#${last.n} · ${last.status==="in_progress"?"en cours":"le plus récent"}`;
+
+  // ---- table ----
+  const recent = timeline.slice(-20).reverse();
+  document.getElementById("table-body").innerHTML = recent.map(r => {
+    const cls = rowClass(r);
+    let pillLabel = cls === "running" ? "en cours" : cls === "cancelled" ? "annulé" : cls === "failure" ? r.conclusion : "terminé";
+    const pillCls = cls === "" ? "ok" : cls;
+    return `<tr><td>#${r.n}</td><td>${fmtDate(r.started)}</td><td><span class="pill ${pillCls}">${pillLabel}</span></td><td>${fmtDur(r.duration_s)}</td></tr>`;
+  }).join("");
+}
+
+// ---------- analyse approfondie des logs (optionnelle, avec jeton) ----------
+function saveToken(t){ try{ localStorage.setItem("oah_token", t); }catch(e){} }
+function loadToken(){ try{ return localStorage.getItem("oah_token") || ""; }catch(e){ return ""; } }
+function clearToken(){
+  try{ localStorage.removeItem("oah_token"); }catch(e){}
+  document.getElementById("token-input").value = "";
+  document.getElementById("deep-status").textContent = "Jeton oublié. Aucune analyse de logs effectuée.";
+}
+
+async function saveTokenAndScan(){
+  const input = document.getElementById("token-input");
+  const token = input.value.trim() || loadToken();
+  if(!token){ document.getElementById("deep-status").textContent = "Colle d'abord un jeton pour lancer l'analyse."; return; }
+  saveToken(token);
+  const status = document.getElementById("deep-status");
+  status.innerHTML = "Analyse en cours…";
+  try{
+    const resp = await fetch(API + "/actions/runs?per_page=30", {headers:{Authorization:"Bearer "+token}});
+    if(!resp.ok) throw new Error("jeton refusé ou invalide (HTTP "+resp.status+")");
+    const data = await resp.json();
+    const runs = data.workflow_runs.filter(r=>r.status==="completed");
+    let lastAvail = null, nearMisses = 0, throttles = 0, scanned = 0;
+    for(const r of runs){
+      try{
+        const jobsResp = await fetch(r.jobs_url, {headers:{Authorization:"Bearer "+token}});
+        const jobs = (await jobsResp.json()).jobs || [];
+        for(const job of jobs){
+          const logResp = await fetch(API + "/actions/jobs/" + job.id + "/logs", {headers:{Authorization:"Bearer "+token}});
+          if(!logResp.ok) continue;
+          const text = await logResp.text();
+          scanned++;
+          if(!lastAvail){
+            const m = text.match(/\[(\d{2}:\d{2}:\d{2})\][^\n]*DISPONIBLE d'apres le rapport/);
+            if(m) lastAvail = {run:r.run_number, time:m[1], date:r.run_started_at};
+          }
+          nearMisses += (text.match(/race perdue/g)||[]).length;
+          throttles += (text.match(/THROTTLE/g)||[]).length;
+        }
+      }catch(e){ /* run isole, on continue */ }
+    }
+    status.innerHTML =
+      `<b>${scanned} logs analysés</b> sur les 30 derniers runs.<br>`+
+      (lastAvail
+        ? `Dernière fenêtre de capacité détectée : run #${lastAvail.run} (${fmtDateTime(lastAvail.date)}, ${lastAvail.time}).`
+        : `Aucune fenêtre "DISPONIBLE" détectée sur cette période — la capacité n'est apparue à aucun moment récent.`)+
+      `<br>Tentatives perdues de justesse (course gagnée par quelqu'un d'autre) : <b>${nearMisses}</b>.`+
+      `<br>Mises en pause anti-throttle (429) : <b>${throttles}</b>.`;
+  }catch(e){
+    status.textContent = "Échec de l'analyse : " + e.message;
+  }
+}
+
+// init
+(function(){
+  const t = loadToken();
+  if(t) document.getElementById("token-input").value = t;
+})();
+loadAll();
+setInterval(loadAll, 5*60*1000);
+</script>
+</body>
+</html>
