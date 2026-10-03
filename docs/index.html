@@ -283,7 +283,7 @@ async function loadAll(){
   try{
     let runs = [];
     for(let page = 1; page <= 10; page++){
-      const resp = await fetch(API + "/actions/runs?per_page=100&page=" + page);
+      const resp = await fetch(API + "/actions/workflows/hunt.yml/runs?per_page=100&page=" + page);
       if(!resp.ok) throw new Error("HTTP " + resp.status);
       const batch = (await resp.json()).workflow_runs;
       runs = runs.concat(batch);
@@ -418,7 +418,7 @@ async function saveTokenAndScan(){
   const status = document.getElementById("deep-status");
   status.innerHTML = "Analyse en cours…";
   try{
-    const resp = await fetch(API + "/actions/runs?per_page=30", {headers:{Authorization:"Bearer "+token}});
+    const resp = await fetch(API + "/actions/workflows/hunt.yml/runs?per_page=30", {headers:{Authorization:"Bearer "+token}});
     if(!resp.ok) throw new Error("jeton refusé ou invalide (HTTP "+resp.status+")");
     const data = await resp.json();
     const runs = data.workflow_runs.filter(r=>r.status==="completed");
