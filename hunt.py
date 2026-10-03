@@ -1,40 +1,35 @@
 """Chasse a la capacite Oracle A1 en continu. Pour GitHub Actions.
 
-Strategie a deux niveaux :
+Deux mecanismes en parallele :
 
-1) RAPPORT DE CAPACITE (lecture seule, ne provisionne rien) : on interroge
-   ComputeCapacityReport toutes les REPORT_INTERVAL secondes pour savoir si
-   la cible (2 OCPU / 12 Go) ou le repli (1 OCPU / 1 Go, le minimum absolu)
-   sont disponibles sur l'hyperviseur, SANS jamais tenter de creer la
-   machine. C'est un appel different de la creation reelle, donc a priori
-   pas soumis a la meme limite de debit -- mais ce n'est pas documente
-   noir sur blanc par Oracle, donc on reste prudent (30s de depart) et on
-   durcit immediatement au moindre 429 recu sur CET appel precis.
-   https://docs.oracle.com/en-us/iaas/tools/python/latest/api/core/models/oci.core.models.ComputeCapacityReport.html
+1) CREATION REELLE toutes les 90 s, QUOI QU'IL ARRIVE, en alternant la cible
+   (2 OCPU / 12 Go) et le repli minimal (1 OCPU / 1 Go). 90 s est le palier
+   trouve a la main et confirme stable (aucun 429).
 
-2) CREATION REELLE : on ne lance launch_instance QUE quand le rapport dit
-   "disponible" pour une forme donnee. La cadence des tentatives de
-   creation elles-memes reste verrouillee a 90s minimum (valeur trouvee
-   manuellement et confirmee stable, aucun 429 en dessous de 90s).
+2) RAPPORT DE CAPACITE (lecture seule) toutes les 30 s, comme simple
+   ACCELERATEUR : s'il annonce de la place, la creation part tout de suite
+   sur la forme annoncee. Il ne bloque JAMAIS une creation : ce rapport est
+   connu pour etre faux (https://github.com/oracle/oci-cli/issues/748), on ne
+   peut donc pas s'y fier pour decider de ne pas essayer.
 
 Si c'est le repli (1/1) qui est obtenu, le script tente ensuite de le
-redimensionner a chaud vers la cible (arret -> resize -> redemarrage).
-Aucun risque de perte : si le redimensionnement echoue par manque de
-place, l'instance reste a 1 OCPU / 1 Go, fonctionnelle, redimensionnable
-manuellement plus tard.
+redimensionner vers la cible (arret -> resize -> redemarrage). Si ca echoue
+par manque de place, l'instance reste a 1/1, fonctionnelle, jamais perdue.
 
-Sortie 0 = session terminee sans capacite (normal, passe le relais au run suivant).
-Sortie 1 = INSTANCE OBTENUE (a la cible ou en repli) -> GitHub envoie un mail
-           d'echec de workflow, c'est volontaire, c'est la notification immediate.
+Les compteurs de chaque session sont publies en annotation GitHub
+(::notice title=STATS::), lisible sans jeton par le tableau de bord.
+
+Sortie 0 = session terminee sans capacite (normal, le run suivant prend le relais).
+Sortie 1 = INSTANCE OBTENUE (ou erreur fatale) -> mail d'echec GitHub, volontaire.
 """
-import os, sys, time, datetime, oci
+import os, sys, time, datetime, signal, oci
 
 CONFIG = {
     "user":        os.environ["OCI_USER"],
     "tenancy":     os.environ["OCI_TENANCY"],
     "fingerprint": os.environ["OCI_FINGERPRINT"],
     "region":      os.environ["OCI_REGION"],
-    "key_file":    "oci_key.pem",
+    "key_file":    os.environ.get("OCI_KEY_FILE", "oci_key.pem"),
 }
 AD     = "Itte:EU-MARSEILLE-1-AD-1"
 SUBNET = os.environ["OCI_SUBNET"]
@@ -42,27 +37,43 @@ IMAGE  = os.environ["OCI_IMAGE"]
 SSHKEY = os.environ["OCI_SSH_KEY"]
 TEN    = CONFIG["tenancy"]
 
-# Duree maximale de la session par runner GitHub (300 minutes = 5 heures)
 MAX_RUN_MINUTES = int(os.environ.get("MAX_RUN_MINUTES", "300"))
 MAX_DURATION    = MAX_RUN_MINUTES * 60
 
-# Cadence du rapport de capacite (lecture seule) -- prudente car non documentee.
 REPORT_INTERVAL_START = 30
-REPORT_INTERVAL_MAX    = 300
+REPORT_INTERVAL_MAX   = 300
 report_interval = REPORT_INTERVAL_START
 
-# Cadence des tentatives de creation reelle -- palier confirme stable.
 LAUNCH_MIN_INTERVAL = 90
 LAUNCH_MAX_INTERVAL = 900
 
 TARGET   = {"ocpus": 2, "memory_in_gbs": 12, "label": "2 OCPU / 12 Go (cible)"}
 FALLBACK = {"ocpus": 1, "memory_in_gbs": 1,  "label": "1 OCPU / 1 Go (repli minimal)"}
 
+STATS = {"verifs": 0, "rapport_dispo": 0, "rapport_429": 0, "creations": 0,
+         "creations_aveugles": 0, "creation_429": 0, "pas_de_capacite": 0, "courses_perdues": 0}
+
 cc = oci.core.ComputeClient(CONFIG)
 vn = oci.core.VirtualNetworkClient(CONFIG)
 
+
 def log(msg, end="\n"):
     print(msg, end=end, flush=True)
+
+
+def emit_stats(reason):
+    line = " ".join(f"{k}={v}" for k, v in STATS.items())
+    print(f"::notice title=STATS::{line} fin={reason}", flush=True)
+
+
+def _on_signal(signum, frame):
+    emit_stats("interrompu")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, _on_signal)
+signal.signal(signal.SIGINT, _on_signal)
+
 
 def make_launch_details(shape_cfg):
     return oci.core.models.LaunchInstanceDetails(
@@ -77,8 +88,10 @@ def make_launch_details(shape_cfg):
         metadata={"ssh_authorized_keys": SSHKEY},
     )
 
+
 def wait_state(get_fn, target_state, max_wait=1200):
     return oci.wait_until(cc, get_fn, "lifecycle_state", target_state, max_wait_seconds=max_wait).data
+
 
 def get_public_ip(instance_id):
     for va in cc.list_vnic_attachments(compartment_id=TEN, instance_id=instance_id).data:
@@ -86,6 +99,7 @@ def get_public_ip(instance_id):
         if v.public_ip:
             return v.public_ip
     return None
+
 
 def announce(inst, shape_label):
     ip = get_public_ip(inst.id)
@@ -95,60 +109,52 @@ def announce(inst, shape_label):
     log("=" * 60)
     sys.exit(1)  # volontaire : declenche le mail de notification GitHub
 
+
 def check_capacity_report():
-    """Interroge le rapport de capacite pour les deux formes en UN seul appel.
-    Retourne (target_available: bool, fallback_available: bool) ou leve
-    ServiceError si l'appel echoue (429 y compris)."""
-    details = oci.core.models.CreateComputeCapacityReportDetails(
+    """Un seul appel pour les deux formes. Retourne (cible_ok, repli_ok)."""
+    M = oci.core.models
+    details = M.CreateComputeCapacityReportDetails(
         compartment_id=TEN,
         availability_domain=AD,
         shape_availabilities=[
-            oci.core.models.CreateCapacityReportShapeAvailabilityDetails(
+            M.CreateCapacityReportShapeAvailabilityDetails(
                 instance_shape="VM.Standard.A1.Flex",
-                instance_shape_config=oci.core.models.CapacityReportInstanceShapeConfig(
-                    ocpus=TARGET["ocpus"], memory_in_gbs=TARGET["memory_in_gbs"])),
-            oci.core.models.CreateCapacityReportShapeAvailabilityDetails(
-                instance_shape="VM.Standard.A1.Flex",
-                instance_shape_config=oci.core.models.CapacityReportInstanceShapeConfig(
-                    ocpus=FALLBACK["ocpus"], memory_in_gbs=FALLBACK["memory_in_gbs"])),
+                instance_shape_config=M.CapacityReportInstanceShapeConfig(
+                    ocpus=cfg["ocpus"], memory_in_gbs=cfg["memory_in_gbs"]))
+            for cfg in (TARGET, FALLBACK)
         ],
     )
-    report = cc.create_compute_capacity_report(details).data
-    avails = report.shape_availabilities
-    target_ok   = avails[0].availability_status == "AVAILABLE"
-    fallback_ok = avails[1].availability_status == "AVAILABLE"
-    return target_ok, fallback_ok
+    avails = cc.create_compute_capacity_report(details).data.shape_availabilities
+    return (avails[0].availability_status == "AVAILABLE",
+            avails[1].availability_status == "AVAILABLE")
 
-def attempt_launch(shape_cfg, min_interval, max_interval):
-    """Tente une creation reelle, avec le meme backoff anti-throttle
-    qu'auparavant. Retourne l'instance si obtenue, None si capacite
-    perdue entre le rapport et la tentative (race), leve/quitte sur
-    erreur fatale."""
-    interval = min_interval
-    throttles = 0
-    while True:
-        try:
-            inst = cc.launch_instance(make_launch_details(shape_cfg)).data
-            return inst
-        except oci.exceptions.ServiceError as e:
-            msg = (e.message or "").lower()
-            if e.status == 429:
-                throttles += 1
-                interval = min_interval if throttles == 1 else min(int(min_interval * (1.25 ** (throttles - 1))), max_interval)
-                wait = min(180 * (2 ** (throttles - 1)), 1800)
-                log(f"  [creation] THROTTLE (429 x{throttles}) -> pause {wait}s")
-                time.sleep(wait)
-                continue
-            if e.status == 500 and "capacity" in msg:
-                log("  [creation] capacite disparue entre le rapport et la tentative (race perdue).")
-                return None
-            log(f"  [creation] erreur {e.status} {e.code} : {e.message}")
-            return None
+
+def try_launch(shape_cfg):
+    """UNE tentative de creation reelle.
+    Retourne (resultat, instance), resultat parmi : ok / capacity / throttle / transient."""
+    try:
+        return "ok", cc.launch_instance(make_launch_details(shape_cfg)).data
+    except oci.exceptions.ServiceError as e:
+        msg = (e.message or "").lower()
+        if e.status == 429:
+            return "throttle", None
+        if e.status == 500 and "capacity" in msg:
+            return "capacity", None
+        if e.status in (401, 500, 502, 503, 504):
+            return "transient", None
+        log(f"ERREUR NON RECUPERABLE {e.status} {e.code} : {e.message}")
+        print(f"::error title=ERREUR_SCRIPT::{e.status} {e.code}", flush=True)
+        emit_stats("erreur")
+        sys.exit(1)
+    except Exception as e:
+        log(f"  [creation] exception {type(e).__name__}: {e}")
+        return "transient", None
+
 
 def try_upsize_to_target(inst):
-    """Tente de faire passer une instance de repli (1/1) a la cible (2/12).
+    """Fait passer une instance de repli (1/1) a la cible (2/12).
     Sans risque : l'instance existe deja, on ne la perd jamais si ca echoue."""
-    log("\n=== Instance de repli obtenue, tentative de redimensionnement vers la cible ===")
+    log("=== Instance de repli obtenue, tentative de redimensionnement vers la cible ===")
     for attempt in range(1, 11):
         try:
             log(f"[redimensionnement #{attempt}] Arret de l'instance...", end=" ")
@@ -156,17 +162,16 @@ def try_upsize_to_target(inst):
             wait_state(cc.get_instance(inst.id), "STOPPED")
             log("arretee.")
 
-            log(f"[redimensionnement #{attempt}] Application de la nouvelle forme (2 OCPU / 12 Go)...", end=" ")
+            log(f"[redimensionnement #{attempt}] Application de la forme 2 OCPU / 12 Go...", end=" ")
             cc.update_instance(inst.id, oci.core.models.UpdateInstanceDetails(
                 shape_config=oci.core.models.UpdateInstanceShapeConfigDetails(
                     ocpus=TARGET["ocpus"], memory_in_gbs=TARGET["memory_in_gbs"])))
-            log("applique.")
+            log("appliquee.")
 
             log(f"[redimensionnement #{attempt}] Redemarrage...", end=" ")
             cc.instance_action(inst.id, "START")
             wait_state(cc.get_instance(inst.id), "RUNNING")
             log("RUNNING.")
-
             log("*** Redimensionnement reussi : instance maintenant a 2 OCPU / 12 Go ***")
             return True
         except oci.exceptions.ServiceError as e:
@@ -185,81 +190,105 @@ def try_upsize_to_target(inst):
             if attempt < 10:
                 time.sleep(60)
     log("Redimensionnement impossible pour l'instant : l'instance reste au format minimal.")
-    log("Elle n'est pas perdue -- redimensionne-la manuellement depuis la console des que la capacite le permet.")
+    log("Elle n'est pas perdue -- redimensionne-la depuis la console des que la capacite le permet.")
     return False
+
+
+def end_session(reason):
+    log(f"[FIN DE SESSION] {reason} - {STATS['verifs']} verifications, {STATS['creations']} creations tentees.")
+    emit_stats("session")
+    sys.exit(0)
+
 
 # Garde-fou : ne jamais creer une deuxieme machine.
 existing = [i for i in cc.list_instances(compartment_id=TEN).data
             if i.lifecycle_state not in ("TERMINATED", "TERMINATING")]
 if existing:
-    inst = existing[0]
-    log(f"Instance deja presente : {inst.display_name} [{inst.lifecycle_state}] - rien a faire.")
+    log(f"Instance deja presente : {existing[0].display_name} [{existing[0].lifecycle_state}] - rien a faire.")
+    print("::notice title=INSTANCE_PRESENTE::une instance existe deja sur le compte", flush=True)
     sys.exit(0)
 
 start_time = time.time()
 log(f"=== DEMARRAGE DE LA CHASSE (session max {MAX_RUN_MINUTES} min) ===")
 log(f"Cible : {TARGET['label']} | Repli : {FALLBACK['label']}")
-log(f"Rapport de capacite : depart {report_interval}s (non documente, prudent) | Creation reelle : plancher {LAUNCH_MIN_INTERVAL}s (confirme stable)")
+log(f"Creation reelle toutes les {LAUNCH_MIN_INTERVAL}s QUOI QUE DISE LE RAPPORT, en alternant cible et repli")
+log(f"Rapport de capacite toutes les {report_interval}s : simple accelerateur")
 
-n = 0
-report_throttles = 0
 inst = None
 obtained_shape = None
+launch_interval = LAUNCH_MIN_INTERVAL
+launch_throttles = 0
+next_launch_at = 0.0
+blind_n = 0
 
 while inst is None:
-    elapsed = time.time() - start_time
-    if elapsed >= MAX_DURATION:
-        log(f"\n[FIN DE SESSION] Duree de {MAX_RUN_MINUTES} min atteinte ({n} verifications).")
-        log("Passage de relais propre au prochain workflow GitHub Actions.")
-        sys.exit(0)
+    if time.time() - start_time >= MAX_DURATION:
+        end_session(f"duree de {MAX_RUN_MINUTES} min atteinte")
 
-    n += 1
+    STATS["verifs"] += 1
     now_str = datetime.datetime.now().strftime("%H:%M:%S")
-    log(f"[{now_str}] Verification #{n} (rapport toutes les {report_interval}s)... ", end="")
-
+    target_ok = fallback_ok = False
+    rapport = "indisponible"
     try:
         target_ok, fallback_ok = check_capacity_report()
-        report_throttles = 0  # une reponse propre : on peut re-accelerer un peu si on avait ralenti
+        rapport = "CIBLE DISPONIBLE" if target_ok else ("REPLI DISPONIBLE" if fallback_ok else "rien")
         if report_interval > REPORT_INTERVAL_START:
             report_interval = max(REPORT_INTERVAL_START, int(report_interval * 0.9))
     except oci.exceptions.ServiceError as e:
         if e.status == 429:
-            report_throttles += 1
+            STATS["rapport_429"] += 1
             report_interval = min(int(report_interval * 1.5), REPORT_INTERVAL_MAX)
-            log(f"THROTTLE sur le rapport (429 x{report_throttles}) -> cadence du rapport portee a {report_interval}s")
-            time.sleep(report_interval)
-            continue
-        log(f"erreur rapport {e.status} {e.code} : {e.message} -> nouvel essai dans {report_interval}s")
-        time.sleep(report_interval)
-        continue
+            rapport = f"THROTTLE 429 -> rapport toutes les {report_interval}s"
+        else:
+            rapport = f"erreur {e.status}"
     except Exception as e:
-        log(f"exception rapport : {type(e).__name__}: {e} -> nouvel essai dans {report_interval}s")
-        time.sleep(report_interval)
-        continue
+        rapport = f"exception {type(e).__name__}"
+    if target_ok or fallback_ok:
+        STATS["rapport_dispo"] += 1
 
-    if target_ok:
-        log("CIBLE DISPONIBLE d'apres le rapport -> tentative de creation immediate.")
-        inst = attempt_launch(TARGET, LAUNCH_MIN_INTERVAL, LAUNCH_MAX_INTERVAL)
-        if inst is not None:
-            obtained_shape = TARGET
-            log(f"CAPACITE OBTENUE (cible) apres {n} verifications ! ID: {inst.id}")
+    action = "pas de creation ce tour"
+    if time.time() >= next_launch_at:
+        blind = not (target_ok or fallback_ok)
+        if target_ok:
+            shape = TARGET
+        elif fallback_ok:
+            shape = FALLBACK
+        else:
+            blind_n += 1
+            shape = TARGET if blind_n % 2 == 1 else FALLBACK
+        STATS["creations"] += 1
+        if blind:
+            STATS["creations_aveugles"] += 1
+        result, got = try_launch(shape)
+        if result == "ok":
+            inst, obtained_shape = got, shape
+            log(f"[{now_str}] #{STATS['verifs']} rapport: {rapport} | creation {shape['label']} -> OBTENUE ! ID: {inst.id}")
             break
-    elif fallback_ok:
-        log("REPLI DISPONIBLE d'apres le rapport -> tentative de creation immediate.")
-        inst = attempt_launch(FALLBACK, LAUNCH_MIN_INTERVAL, LAUNCH_MAX_INTERVAL)
-        if inst is not None:
-            obtained_shape = FALLBACK
-            log(f"CAPACITE OBTENUE (repli) apres {n} verifications ! ID: {inst.id}")
-            break
-    else:
-        log("aucune capacite (rapport) pour la cible ni le repli.")
+        if result == "throttle":
+            STATS["creation_429"] += 1
+            launch_throttles += 1
+            pause = min(180 * (2 ** (launch_throttles - 1)), 1800)
+            launch_interval = min(int(LAUNCH_MIN_INTERVAL * (1.25 ** launch_throttles)), LAUNCH_MAX_INTERVAL)
+            next_launch_at = time.time() + pause
+            action = f"creation {shape['label']} -> THROTTLE 429 (x{launch_throttles}), pause creation {pause}s"
+        else:
+            if result == "capacity":
+                STATS["pas_de_capacite"] += 1
+                if not blind:
+                    STATS["courses_perdues"] += 1
+            launch_throttles = 0
+            launch_interval = max(LAUNCH_MIN_INTERVAL, int(launch_interval * 0.95))
+            next_launch_at = time.time() + launch_interval
+            action = f"creation {shape['label']} -> " + ("pas de capacite" if result == "capacity" else "erreur transitoire")
+
+    log(f"[{now_str}] #{STATS['verifs']} rapport: {rapport} | {action}")
 
     if (time.time() - start_time) + report_interval >= MAX_DURATION:
-        log(f"\n[FIN DE SESSION] Temps restant insuffisant. Total: {n} verifications. Fin propre (exit 0).")
-        sys.exit(0)
-
+        end_session("temps restant insuffisant")
     time.sleep(report_interval)
 
+print(f"::notice title=INSTANCE_OBTENUE::forme={obtained_shape['label']}", flush=True)
+emit_stats("obtenue")
 log("Attente du passage de l'instance en RUNNING...")
 inst = wait_state(cc.get_instance(inst.id), "RUNNING")
 

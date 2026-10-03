@@ -89,6 +89,8 @@
   .bar.cancelled{background:var(--warn); opacity:.85;}
   .bar.running{background:var(--accent);}
   .bar.failure{background:var(--crit);}
+  .bar.runner{background:var(--warn);}
+  .bar.queued{background:var(--accent); opacity:.4;}
   @media (prefers-reduced-motion: no-preference){ .bar.running{animation:glow 1.8s ease-in-out infinite;} }
   @keyframes glow{ 0%,100%{opacity:1;} 50%{opacity:.55;} }
   .chart-axis{display:flex; justify-content:space-between; font-size:.7rem; color:var(--ink-dim);
@@ -171,7 +173,7 @@
       <span><i style="background:var(--ok)"></i>terminé, pas de capacité (normal)</span>
       <span><i style="background:var(--warn)"></i>annulé (remplacé par le run suivant)</span>
       <span><i style="background:var(--accent)"></i>en cours</span>
-      <span><i style="background:var(--crit)"></i>échec réel — à vérifier</span>
+      <span><i style="background:var(--crit)"></i>erreur à vérifier</span>
     </div>
   </div>
 
@@ -195,13 +197,24 @@
         <dt>Forme de repli</dt><dd>1 OCPU · 1 Go</dd>
         <dt>Image</dt><dd>Ubuntu 24.04 aarch64</dd>
         <dt>Disque</dt><dd>150 Go</dd>
-        <dt>Détection</dt><dd>rapport de capacité</dd>
-        <dt>Cadence rapport</dt><dd>30 s → 300 s</dd>
-        <dt>Cadence création</dt><dd>90 s min.</dd>
+        <dt>Création réelle</dt><dd>toutes les 90 s</dd>
+        <dt>Alternance</dt><dd>cible / repli</dd>
+        <dt>Rapport de capacité</dt><dd>30 s, accélérateur</dd>
         <dt>Planification</dt><dd>toutes les 10 min</dd>
       </dl>
       <hr>
       <p class="note">Si le repli (1/1) décroche en premier, le script tente automatiquement de l'agrandir vers la cible (arrêt → redimensionnement → redémarrage), jusqu'à 10 essais. En cas d'échec, l'instance reste à 1/1 — jamais perdue.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Compteurs des dernières sessions</h2>
+    <p class="desc">Ce que le script a réellement fait pendant chaque session d'environ 5 h. « 429 » = Oracle a demandé de ralentir. « Rapport dispo » = le rapport de capacité a annoncé de la place ; « courses perdues » = la création lancée dans la foulée a quand même échoué.</p>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>Run</th><th>Vérifs</th><th>Créations tentées</th><th>Sans capacité</th><th>429 création</th><th>429 rapport</th><th>Rapport dispo</th><th>Courses perdues</th></tr></thead>
+        <tbody id="stats-body"></tbody>
+      </table>
     </div>
   </div>
 
@@ -216,7 +229,7 @@
     <div class="deep-status" id="deep-status">Aucune analyse de logs effectuée pour l'instant.</div>
   </div>
 
-  <p class="footer-note">Page statique GitHub Pages — s'actualise en direct depuis l'API GitHub à chaque ouverture (et toutes les 5 min). Aucune donnée n'est stockée ailleurs que dans ton navigateur.</p>
+  <p class="footer-note">Page statique GitHub Pages — s'actualise en direct depuis l'API GitHub à chaque ouverture (et toutes les 10 min). Aucune donnée n'est stockée ailleurs que dans ton navigateur.</p>
 </div>
 
 <script>
@@ -237,54 +250,115 @@ function fmtDateTime(iso){
 }
 
 function rowClass(r){
-  if(r.status !== "completed") return "running";
+  if(r.status === "in_progress") return "running";
+  if(r.status !== "completed") return "queued";
   if(r.conclusion === "cancelled") return "cancelled";
   if(r.conclusion === "success") return "";
-  return "failure"; // failure, timed_out, etc. — genuine anomaly to check
+  if(r.kind === "runner") return "runner";
+  return "failure";
+}
+
+// Annotations d'un run (publiques, sans jeton). Mises en cache : un run termine ne change plus.
+async function runNotes(run){
+  const key = "oah_ann_" + run.id;
+  if(run.status === "completed"){
+    try{ const c = localStorage.getItem(key); if(c) return JSON.parse(c); }catch(e){}
+  }
+  let out = [];
+  const jr = await fetch(run.jobs_url);
+  if(!jr.ok) throw new Error("HTTP " + jr.status);
+  for(const j of ((await jr.json()).jobs || [])){
+    const r = await fetch(API + "/check-runs/" + j.id + "/annotations");
+    if(r.ok) out = out.concat((await r.json()).map(a => ({title:a.title||"", message:a.message||""})));
+  }
+  if(run.status === "completed"){
+    try{ localStorage.setItem(key, JSON.stringify(out)); }catch(e){}
+  }
+  return out;
 }
 
 async function loadAll(){
   const btn = document.getElementById("refresh-btn");
   btn.disabled = true; btn.textContent = "↻ Actualisation…";
   try{
-    const resp = await fetch(API + "/actions/runs?per_page=100");
-    if(!resp.ok) throw new Error("HTTP " + resp.status);
-    const data = await resp.json();
-    render(data.workflow_runs.slice().reverse()); // ordre chronologique croissant
+    let runs = [];
+    for(let page = 1; page <= 10; page++){
+      const resp = await fetch(API + "/actions/runs?per_page=100&page=" + page);
+      if(!resp.ok) throw new Error("HTTP " + resp.status);
+      const batch = (await resp.json()).workflow_runs;
+      runs = runs.concat(batch);
+      if(batch.length < 100) break;
+    }
+    runs.reverse(); // ordre chronologique croissant
+
+    // Annotations : tous les runs anormaux + les 5 dernieres sessions terminees.
+    const abnormal = runs.filter(r => r.status==="completed" && r.conclusion!=="success" && r.conclusion!=="cancelled");
+    const lastDone = runs.filter(r => r.status==="completed" && r.conclusion==="success").slice(-5);
+    const notes = {};
+    for(const r of abnormal.concat(lastDone)){
+      try{ notes[r.run_number] = await runNotes(r); }catch(e){ /* quota API : on fera sans */ }
+    }
+    render(runs, notes);
   }catch(e){
     document.getElementById("banner-title").textContent = "Impossible de contacter l'API GitHub";
-    document.getElementById("banner-sub").textContent = e.message + " — nouvel essai dans 5 min, ou clique Actualiser.";
+    document.getElementById("banner-sub").textContent = e.message + " — nouvel essai dans 10 min, ou clique Actualiser.";
     document.getElementById("banner").classList.add("crit");
   }finally{
     btn.disabled = false; btn.textContent = "↻ Actualiser";
   }
 }
 
-function render(runs){
+function render(runs, notes){
   const now = new Date();
+  const has = (n, title) => (notes[n] || []).some(a => a.title === title);
   const timeline = runs.map(r => {
     const started = new Date(r.run_started_at);
     const dur = r.status === "completed" ? (new Date(r.updated_at) - started)/1000 : (now - started)/1000;
-    return {n:r.run_number, status:r.status, conclusion:r.conclusion, started:r.run_started_at, duration_s:dur, html_url:r.html_url};
+    let kind = "";
+    if(r.status==="completed" && r.conclusion!=="success" && r.conclusion!=="cancelled"){
+      const msgs = (notes[r.run_number] || []).map(a => a.message).join(" ");
+      if(has(r.run_number, "INSTANCE_OBTENUE")) kind = "obtained";
+      else if(/lost communication/i.test(msgs)) kind = "runner";
+      else kind = "error";
+    }
+    return {n:r.run_number, status:r.status, conclusion:r.conclusion, started:r.run_started_at, duration_s:dur, html_url:r.html_url, kind};
   });
-  const last = timeline[timeline.length-1];
+  const active = timeline.filter(t => t.status === "in_progress").pop();
+  const last = active || timeline[timeline.length-1];
   const first = timeline[0];
 
   // ---- banner ----
-  const anyFailure = timeline.some(t => t.status==="completed" && t.conclusion!=="success" && t.conclusion!=="cancelled");
+  const obtained = timeline.filter(t => t.kind === "obtained").pop()
+    || timeline.filter(t => has(t.n, "INSTANCE_PRESENTE")).pop();
+  const errors = timeline.filter(t => t.kind === "error");
+  const runnerLost = timeline.filter(t => t.kind === "runner");
   const banner = document.getElementById("banner");
-  banner.classList.toggle("crit", anyFailure);
-  if(anyFailure){
-    const bad = timeline.filter(t => t.status==="completed" && t.conclusion!=="success" && t.conclusion!=="cancelled").pop();
-    document.getElementById("banner-title").innerHTML =
-      `Un run s'est terminé en "${bad.conclusion}" — <a href="${bad.html_url}" target="_blank">vérifie le run #${bad.n}</a>`;
-    document.getElementById("banner-sub").textContent =
-      "Ça peut être une instance obtenue (bonne nouvelle) ou une vraie erreur — ouvre les logs pour savoir.";
+  const title = document.getElementById("banner-title"), sub = document.getElementById("banner-sub");
+  banner.classList.toggle("crit", !obtained && errors.length > 0);
+  if(obtained){
+    title.innerHTML = `INSTANCE OBTENUE — <a href="${obtained.html_url}" target="_blank">run #${obtained.n}</a>`;
+    sub.textContent = "L'adresse IP est dans les logs de ce run. La chasse s'arrête d'elle-même.";
+  } else if(errors.length){
+    const bad = errors[errors.length-1];
+    title.innerHTML = `Le run #${bad.n} s'est terminé en "${bad.conclusion}" — <a href="${bad.html_url}" target="_blank">ouvre ses logs</a>`;
+    sub.textContent = "Erreur non expliquée par une panne GitHub : à vérifier.";
   } else {
-    document.getElementById("banner-title").textContent = "Aucune capacité trouvée pour l'instant";
-    document.getElementById("banner-sub").textContent =
-      `Run #${last.n} ${last.status==="in_progress" ? "en cours depuis "+fmtDur(last.duration_s) : "terminé"} · nouvelle vérification toutes les 10 min.`;
+    title.textContent = "Aucune capacité trouvée pour l'instant";
+    sub.textContent =
+      (active ? `Run #${active.n} en cours depuis ${fmtDur(active.duration_s)}` : `Dernier run : #${last.n}`) +
+      " · une vraie tentative de création toutes les 90 s." +
+      (runnerLost.length ? ` · ${runnerLost.length} panne(s) de machine côté GitHub (run #${runnerLost.map(t=>t.n).join(", #")}), sans conséquence.` : "");
   }
+
+  // ---- compteurs de session (annotations STATS) ----
+  const rows = timeline.filter(t => notes[t.n] && t.status==="completed" && t.conclusion==="success").slice(-5).reverse().map(t => {
+    const st = (notes[t.n] || []).find(a => a.title === "STATS");
+    if(!st) return `<tr><td>#${t.n}</td><td colspan="7" style="color:var(--ink-dim);font-family:inherit">ancienne version du script — pas de compteurs</td></tr>`;
+    const v = {}; st.message.split(/\s+/).forEach(p => { const [k,x] = p.split("="); v[k] = x; });
+    return `<tr><td>#${t.n}</td><td>${v.verifs}</td><td>${v.creations}</td><td>${v.pas_de_capacite}</td><td>${v.creation_429}</td><td>${v.rapport_429}</td><td>${v.rapport_dispo}</td><td>${v.courses_perdues}</td></tr>`;
+  });
+  document.getElementById("stats-body").innerHTML = rows.join("") ||
+    `<tr><td colspan="8" style="color:var(--ink-dim);font-family:inherit">Pas encore de session terminée avec compteurs.</td></tr>`;
 
   // ---- tiles ----
   const elapsedH = (now - new Date(first.started)) / 3600000;
@@ -300,7 +374,7 @@ function render(runs){
     {n: success.length, l:"Terminées sans capacité", cls:"ok"},
     {n: cancelled.length, l:"Annulées (relais)", cls:"warn"},
     {n: fmtDur(avgSuccess), l:"Durée moyenne / run"},
-    {n: "#"+last.n, l: last.status==="in_progress" ? "Run en cours" : "Dernier run"},
+    {n: "#"+last.n, l: active ? "Run en cours" : "Dernier run"},
   ];
   document.getElementById("tiles").innerHTML = tiles.map(t =>
     `<div class="tile ${t.cls||''}"><div class="n">${t.n}</div><div class="l">${t.l}</div></div>`
@@ -311,18 +385,18 @@ function render(runs){
   const scale = d => 6 + 118 * Math.sqrt(d / maxDur);
   document.getElementById("chart").innerHTML = timeline.map(r => {
     const cls = rowClass(r);
-    const label = `Run #${r.n} · ${fmtDate(r.started)} · ${fmtDur(r.duration_s)} · ${r.status==="in_progress"?"en cours":r.conclusion}`;
+    const label = `Run #${r.n} · ${fmtDate(r.started)} · ${fmtDur(r.duration_s)} · ${r.status==="in_progress"?"en cours":(r.status!=="completed"?"en attente":(r.kind==="runner"?"panne machine GitHub":r.conclusion))}`;
     return `<a href="${r.html_url}" target="_blank" style="text-decoration:none"><div class="bar ${cls}" style="height:${scale(r.duration_s).toFixed(0)}px" title="${label}"></div></a>`;
   }).join("");
   document.getElementById("axis-left").textContent = `#${first.n} · ${fmtDate(first.started)}`;
-  document.getElementById("axis-right").textContent = `#${last.n} · ${last.status==="in_progress"?"en cours":"le plus récent"}`;
+  document.getElementById("axis-right").textContent = `#${timeline[timeline.length-1].n} · le plus récent`;
 
   // ---- table ----
   const recent = timeline.slice(-20).reverse();
   document.getElementById("table-body").innerHTML = recent.map(r => {
     const cls = rowClass(r);
-    let pillLabel = cls === "running" ? "en cours" : cls === "cancelled" ? "annulé" : cls === "failure" ? r.conclusion : "terminé";
-    const pillCls = cls === "" ? "ok" : cls;
+    const pillLabel = {running:"en cours", queued:"en attente", cancelled:"annulé", runner:"panne GitHub", failure:r.conclusion}[cls] || "terminé";
+    const pillCls = {"":"ok", queued:"running", runner:"warn", cancelled:"warn"}[cls] || cls;
     return `<tr><td>#${r.n}</td><td>${fmtDate(r.started)}</td><td><span class="pill ${pillCls}">${pillLabel}</span></td><td>${fmtDur(r.duration_s)}</td></tr>`;
   }).join("");
 }
@@ -359,10 +433,10 @@ async function saveTokenAndScan(){
           const text = await logResp.text();
           scanned++;
           if(!lastAvail){
-            const m = text.match(/\[(\d{2}:\d{2}:\d{2})\][^\n]*DISPONIBLE d'apres le rapport/);
+            const m = text.match(/\[(\d{2}:\d{2}:\d{2})\][^\n]*(?:CIBLE|REPLI) DISPONIBLE/);
             if(m) lastAvail = {run:r.run_number, time:m[1], date:r.run_started_at};
           }
-          nearMisses += (text.match(/race perdue/g)||[]).length;
+          nearMisses += (text.match(/DISPONIBLE \| creation[^\n]*pas de capacite|race perdue/g)||[]).length;
           throttles += (text.match(/THROTTLE/g)||[]).length;
         }
       }catch(e){ /* run isole, on continue */ }
@@ -385,7 +459,7 @@ async function saveTokenAndScan(){
   if(t) document.getElementById("token-input").value = t;
 })();
 loadAll();
-setInterval(loadAll, 5*60*1000);
+setInterval(loadAll, 10*60*1000);
 </script>
 </body>
 </html>
