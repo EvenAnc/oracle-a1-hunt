@@ -77,7 +77,7 @@ signal.signal(signal.SIGINT, _on_signal)
 
 def make_launch_details(shape_cfg):
     return oci.core.models.LaunchInstanceDetails(
-        availability_domain=AD, compartment_id=TEN, display_name="SERV PERSO EVEN",
+        availability_domain=AD, compartment_id=TEN, display_name="serveur-a1",
         shape="VM.Standard.A1.Flex",
         shape_config=oci.core.models.LaunchInstanceShapeConfigDetails(
             ocpus=shape_cfg["ocpus"], memory_in_gbs=shape_cfg["memory_in_gbs"]),
@@ -104,8 +104,9 @@ def get_public_ip(instance_id):
 def announce(inst, shape_label):
     ip = get_public_ip(inst.id)
     log("=" * 60)
-    log(f"  SERVEUR ORACLE OBTENU ({shape_label}) - IP PUBLIQUE : {ip}")
-    log(f"  ssh -i ~/.ssh/oracle_mc ubuntu@{ip}")
+    # Les journaux de ce depot sont publics : ni adresse IP ni identifiant ici.
+    log(f"  SERVEUR ORACLE OBTENU ({shape_label}) - IP publique {'attribuee' if ip else 'pas encore attribuee'}")
+    log("  Adresse a lire dans la console Oracle : Compute > Instances")
     log("=" * 60)
     sys.exit(1)  # volontaire : declenche le mail de notification GitHub
 
@@ -204,7 +205,7 @@ def end_session(reason):
 existing = [i for i in cc.list_instances(compartment_id=TEN).data
             if i.lifecycle_state not in ("TERMINATED", "TERMINATING")]
 if existing:
-    log(f"Instance deja presente : {existing[0].display_name} [{existing[0].lifecycle_state}] - rien a faire.")
+    log(f"Instance deja presente [{existing[0].lifecycle_state}] - rien a faire.")
     print("::notice title=INSTANCE_PRESENTE::une instance existe deja sur le compte", flush=True)
     sys.exit(0)
 
@@ -262,7 +263,7 @@ while inst is None:
         result, got = try_launch(shape)
         if result == "ok":
             inst, obtained_shape = got, shape
-            log(f"[{now_str}] #{STATS['verifs']} rapport: {rapport} | creation {shape['label']} -> OBTENUE ! ID: {inst.id}")
+            log(f"[{now_str}] #{STATS['verifs']} rapport: {rapport} | creation {shape['label']} -> OBTENUE !")
             break
         if result == "throttle":
             STATS["creation_429"] += 1
