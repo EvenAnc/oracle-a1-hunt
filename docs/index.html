@@ -337,7 +337,7 @@ function render(runs, notes){
   banner.classList.toggle("crit", !obtained && errors.length > 0);
   if(obtained){
     title.innerHTML = `INSTANCE OBTENUE — <a href="${obtained.html_url}" target="_blank">run #${obtained.n}</a>`;
-    sub.textContent = "L'adresse IP est dans les logs de ce run. La chasse s'arrête d'elle-même.";
+    sub.textContent = "L'adresse IP se lit dans la console Oracle (Compute > Instances). La chasse s'arrête d'elle-même.";
   } else if(errors.length){
     const bad = errors[errors.length-1];
     title.innerHTML = `Le run #${bad.n} s'est terminé en "${bad.conclusion}" — <a href="${bad.html_url}" target="_blank">ouvre ses logs</a>`;

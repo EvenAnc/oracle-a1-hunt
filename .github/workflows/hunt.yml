@@ -25,8 +25,10 @@ jobs:
       - run: pip install --quiet oci
 
       - name: Ecrire la cle API
+        env:
+          OCI_KEY: ${{ secrets.OCI_KEY }}
         run: |
-          printf '%s' "${{ secrets.OCI_KEY }}" > oci_key.pem
+          printf '%s' "$OCI_KEY" > oci_key.pem
           chmod 600 oci_key.pem
 
       - name: Chasse en boucle
